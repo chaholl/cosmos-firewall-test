@@ -1,0 +1,259 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "application_insights_name": {
+            "type": "string",
+            "defaultValue": "[concat('ai-', uniqueString(resourceGroup().id))]",
+            "metadata": {
+                "description": "The name of the application insights instance that will be hooked up to any function apps."
+            }
+        },
+        "cosmos_account_name": {
+            "type": "string",
+            "defaultValue": "[concat('sql-', uniqueString(resourceGroup().id))]",
+            "metadata": {
+                "description": "Cosmos DB account name, max length 44 characters"
+            }
+        },
+        "function_app_name": {
+            "type": "string",
+            "defaultValue": "[concat('test', uniqueString(resourceGroup().id))]"
+        },
+        "cosmos_automatic_failover": {
+            "type": "bool",
+            "defaultValue": false,
+            "allowedValues": [
+                true,
+                false
+            ],
+            "metadata": {
+                "description": "Enable automatic failover for regions. Ignored when Multi-Master is enabled"
+            }
+        },
+        "cosmos_default_consistency_level": {
+            "type": "string",
+            "defaultValue": "Session",
+            "allowedValues": [
+                "Eventual",
+                "ConsistentPrefix",
+                "Session",
+                "BoundedStaleness",
+                "Strong"
+            ],
+            "metadata": {
+                "description": "The default consistency level of the Cosmos DB account."
+            }
+        },
+        "cosmos_max_interval_seconds": {
+            "type": "int",
+            "minValue": 5,
+            "defaultValue": 300,
+            "maxValue": 86400,
+            "metadata": {
+                "description": "Max lag time (minutes). Required for BoundedStaleness. Valid ranges, Single Region: 5 to 84600. Multi Region: 300 to 86400."
+            }
+        },
+        "cosmos_max_staleness_prefix": {
+            "type": "int",
+            "minValue": 10,
+            "defaultValue": 100000,
+            "maxValue": 2147483647,
+            "metadata": {
+                "description": "Max stale requests. Required for BoundedStaleness. Valid ranges, Single Region: 10 to 1000000. Multi Region: 100000 to 1000000."
+            }
+        },
+        "function_app_runtime": {
+            "defaultValue": "dotnet",
+            "allowedValues": [
+                "node",
+                "dotnet",
+                "java"
+            ],
+            "type": "string",
+            "metadata": {
+                "description": "The language worker runtime to load in the function app."
+            }
+        },
+        "function_app_storage_account_type": {
+            "defaultValue": "Standard_LRS",
+            "allowedValues": [
+                "Standard_LRS",
+                "Standard_GRS",
+                "Standard_RAGRS"
+            ],
+            "type": "String",
+            "metadata": {
+                "description": "Storage Account type"
+            }
+        },
+        "cosmos_multiple_write_locations": {
+            "type": "bool",
+            "defaultValue": false,
+            "allowedValues": [
+                true,
+                false
+            ],
+            "metadata": {
+                "description": "Enable multi-master to make all regions writable."
+            }
+        },
+        "cosmos_primary_region": {
+            "type": "string",
+            "defaultValue": "South Central US",
+            "metadata": {
+                "description": "The primary replica region for the Cosmos DB account."
+            }
+        },
+        "location": {
+            "defaultValue": "[resourceGroup().location]",
+            "type": "String",
+            "metadata": {
+                "description": "Location for all resources."
+            }
+        }
+    },
+    "functions": [],
+    "variables": {
+        "consistencyPolicy": {
+            "Eventual": {
+                "defaultConsistencyLevel": "Eventual"
+            },
+            "ConsistentPrefix": {
+                "defaultConsistencyLevel": "ConsistentPrefix"
+            },
+            "Session": {
+                "defaultConsistencyLevel": "Session"
+            },
+            "BoundedStaleness": {
+                "defaultConsistencyLevel": "BoundedStaleness",
+                "maxStalenessPrefix": "[parameters('cosmos_max_staleness_prefix')]",
+                "maxIntervalInSeconds": "[parameters('cosmos_max_interval_seconds')]"
+            },
+            "Strong": {
+                "defaultConsistencyLevel": "Strong"
+            }
+        },
+        "cosmosAccountName": "[toLower(parameters('cosmos_account_name'))]",
+        "cosmosResourceId": "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName'))]",
+        "functionAppStorageAccountid": "[concat(resourceGroup().id,'/providers/','Microsoft.Storage/storageAccounts/', variables('functionAppStorageAccountName'))]",
+        "functionAppStorageAccountName": "[concat(uniquestring(resourceGroup().id), 'azfunctions')]",
+        "functionWorkerRuntime": "[parameters('function_app_runtime')]",
+        "functionAppHostingPlanName": "[concat(parameters('function_app_name'),'-plan')]",
+        "locations": [
+            {
+                "locationName": "[parameters('cosmos_primary_region')]",
+                "failoverPriority": 0,
+                "isZoneRedundant": false
+            }
+        ]
+    },
+    "resources": [
+        {
+            "type": "microsoft.insights/components",
+            "apiVersion": "2018-05-01-preview",
+            "name": "[parameters('application_insights_name')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "[concat('hidden-link:', resourceGroup().id, '/providers/Microsoft.Web/sites/', parameters('application_insights_name'))]": "Resource"
+            },
+            "properties": {
+                "ApplicationId": "[parameters('application_insights_name')]",
+                "Request_Source": "IbizaWebAppExtensionCreate"
+            }
+        },
+        {
+            "type": "Microsoft.DocumentDB/databaseAccounts",
+            "name": "[variables('cosmosAccountName')]",
+            "apiVersion": "2019-08-01",
+            "kind": "GlobalDocumentDB",
+            "location": "[parameters('location')]",
+            "tags": {
+                "ingress1": "[parameters('function_app_name')]"
+            },
+            "properties": {
+                "consistencyPolicy": "[variables('consistencyPolicy')[parameters('cosmos_default_consistency_level')]]",
+                "locations": "[variables('locations')]",
+                "databaseAccountOfferType": "Standard",
+                "enableAutomaticFailover": "[parameters('cosmos_automatic_failover')]",
+                "enableMultipleWriteLocations": "[parameters('cosmos_multiple_write_locations')]"
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2019-06-01",
+            "name": "[variables('functionAppStorageAccountName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                "name": "[parameters('function_app_storage_account_type')]"
+            },
+            "kind": "Storage"
+        },
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2018-02-01",
+            "name": "[variables('functionAppHostingPlanName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                "name": "Y1",
+                "tier": "Dynamic"
+            },
+            "properties": {
+                "name": "[variables('functionAppHostingPlanName')]",
+                "computeMode": "Dynamic"
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2015-08-01",
+            "name": "[parameters('function_app_name')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "egress": "[variables('cosmosAccountName')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('functionAppHostingPlanName'))]"
+            ],
+            "kind": "functionapp",
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('functionAppHostingPlanName'))]",
+                "httpsOnly": true,
+                "siteConfig": {
+                    "appSettings": [
+
+                        {
+                            "name": "AzureWebJobsStorage",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('functionAppStorageAccountName'), ';AccountKey=', listKeys(variables('functionAppStorageAccountid'),'2015-05-01-preview').key1)]"
+                        },
+                        {
+                            "name": "CosmosConnectionString",
+                            "value": "[concat('AccountEndpoint=https://', variables('cosmosAccountName'), '.documents.azure.com:443/;AccountKey=', listKeys(variables('cosmosResourceId'), '2019-12-12').primaryMasterKey, ';')]"
+                        },
+                        {
+                            "name": "CosmosDatabase",
+                            "value": "test_me_happy"
+                        },
+                        {
+                            "name": "FUNCTIONS_EXTENSION_VERSION",
+                            "value": "~2"
+                        },
+                        {
+                            "name": "WEBSITE_NODE_DEFAULT_VERSION",
+                            "value": "~10"
+                        },
+                        {
+                            "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+                            "value": "[reference(resourceId('microsoft.insights/components/', parameters('application_insights_name')), '2015-05-01').InstrumentationKey]"
+                        },
+                        {
+                            "name": "FUNCTIONS_WORKER_RUNTIME",
+                            "value": "[variables('functionWorkerRuntime')]"
+                        }
+                    ]
+                }
+            }
+        }
+
+    ],
+    "outputs": {}
+}
